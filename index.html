@@ -92,19 +92,32 @@
             border-radius: 5px;
             z-index: 10;
         }
+        #muteButton {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 20px;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+            z-index: 10;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
     <div id="loadingScreen">Загрузка игры...</div>
     <div id="errorMessage"></div>
     <div id="scoreDisplay">Счет: 0</div>
+    <div id="muteButton">Звук: Вкл</div>
     <canvas id="renderCanvas"></canvas>
     <div id="mobileControls">
         <div id="leftBtn" class="controlBtn">←</div>
         <div id="jumpBtn" class="controlBtn">↑</div>
         <div id="rightBtn" class="controlBtn">→</div>
     </div>
-    
+
     <script src="https://cdn.babylonjs.com/babylon.js"></script>
     <script src="https://cdn.babylonjs.com/cannon.js"></script>
     <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
@@ -123,84 +136,99 @@
                 // Получаем canvas и создаем движок
                 const canvas = document.getElementById('renderCanvas');
                 const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
-                
+
                 // Определяем, используется ли мобильное устройство
-                const isMobile = ('ontouchstart' in window) || 
-                                (navigator.maxTouchPoints > 0) || 
+                const isMobile = ('ontouchstart' in window) ||
+                                (navigator.maxTouchPoints > 0) ||
                                 (navigator.msMaxTouchPoints > 0) ||
                                 /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-                
+
                 // Устанавливаем элементы управления для мобильных устройств
                 const mobileControls = document.getElementById('mobileControls');
                 mobileControls.style.display = isMobile ? 'flex' : 'none';
-                
+
                 console.log("Устройство определено как: " + (isMobile ? "мобильное" : "настольное"));
-                
+
                 // Счетчик очков
                 let score = 0;
-                
+
+                // Звуки
+                let jumpSound, collectSound, backgroundMusic;
+                let isMuted = false;
+                const muteButton = document.getElementById('muteButton');
+
+                muteButton.onclick = function() {
+                    isMuted = !isMuted;
+                    muteButton.textContent = "Звук: " + (isMuted ? "Выкл" : "Вкл");
+                    if (backgroundMusic) {
+                        backgroundMusic.setVolume(isMuted ? 0 : 0.5); // Уровень громкости фоновой музыки
+                    }
+                };
+
+
                 // Создаем сцену
                 const createScene = function() {
                     const scene = new BABYLON.Scene(engine);
                     scene.clearColor = new BABYLON.Color4(0.53, 0.81, 0.92, 1.0); // Небесно-голубой фон
-                    
+
                     // Установка физики с уменьшенной гравитацией для лучших прыжков
                     const gravityVector = new BABYLON.Vector3(0, -8.0, 0); // Уменьшенная гравитация
                     const physicsPlugin = new BABYLON.CannonJSPlugin();
                     scene.enablePhysics(gravityVector, physicsPlugin);
-                    
+
                     // Создаем простую камеру
                     const camera = new BABYLON.FreeCamera("camera", new BABYLON.Vector3(0, 5, 10), scene);
                     camera.setTarget(new BABYLON.Vector3(0, 0, 0));
-                    
+
                     // Создаем свет
                     const light1 = new BABYLON.HemisphericLight("light1", new BABYLON.Vector3(0, 1, 0), scene);
                     light1.intensity = 0.7;
-                    
+
                     // Направленный свет для лучших теней
                     const light2 = new BABYLON.DirectionalLight("light2", new BABYLON.Vector3(0, -1, 1), scene);
                     light2.intensity = 0.5;
-                    
-                    // Создаем оранжевый мяч (игрок)
+
+                    // Создаем синий мяч (игрок)
                     const ball = BABYLON.MeshBuilder.CreateSphere("ball", {diameter: 2, segments: 16}, scene);
                     const ballMaterial = new BABYLON.StandardMaterial("ballMaterial", scene);
-                    ballMaterial.diffuseColor = new BABYLON.Color3(1, 0.5, 0);
+                    ballMaterial.diffuseColor = new BABYLON.Color3(0.0, 0.0, 1.0); // Синий цвет
                     ballMaterial.specularColor = new BABYLON.Color3(0.8, 0.8, 0.8);
                     ballMaterial.specularPower = 32;
                     ball.material = ballMaterial;
                     ball.position.y = 4; // Поднимаем мяч выше для начала игры
-                    
+
                     // Добавляем физическое тело к мячу
                     ball.physicsImpostor = new BABYLON.PhysicsImpostor(
-                        ball, 
-                        BABYLON.PhysicsImpostor.SphereImpostor, 
-                        { mass: 1, restitution: 0.5, friction: 0.1 }, 
+                        ball,
+                        BABYLON.PhysicsImpostor.SphereImpostor,
+                        { mass: 1, restitution: 0.5, friction: 0.1 },
                         scene
                     );
-                    
+
                     // Массив для хранения всех объектов платформ
                     const rails = [];
-                    
+
                     // Массив для хранения букв
                     const letters = [];
-                    
+
                     // Система бесконечных платформ
                     let lastPlatformZ = 0; // Позиция последней созданной платформы
                     const platformHeight = 1; // Высота платформ
                     let baseY = 0; // Базовая высота (осевая линия)
                     let lastBaseY = 0; // Последняя базовая высота для плавного перехода
-                    
+
                     // Создание материалов для букв
+                    const greenMaterial = new BABYLON.StandardMaterial("greenMaterial", scene);
+                    greenMaterial.diffuseColor = new BABYLON.Color3(0.0, 1.0, 0.0); // Зеленый цвет
+                    greenMaterial.specularColor = new BABYLON.Color3(0.2, 1.0, 0.2);
+                    greenMaterial.emissiveColor = new BABYLON.Color3(0.0, 0.5, 0.0);
+
                     const blueMaterial = new BABYLON.StandardMaterial("blueMaterial", scene);
-                    blueMaterial.diffuseColor = new BABYLON.Color3(0.0, 0.4, 1.0); // Синий цвет
-                    blueMaterial.specularColor = new BABYLON.Color3(0.2, 0.2, 1.0);
-                    blueMaterial.emissiveColor = new BABYLON.Color3(0.0, 0.0, 0.5);
-                    
-                    const pinkMaterial = new BABYLON.StandardMaterial("pinkMaterial", scene);
-                    pinkMaterial.diffuseColor = new BABYLON.Color3(1.0, 0.4, 0.7); // Розовый цвет
-                    pinkMaterial.specularColor = new BABYLON.Color3(1.0, 0.2, 0.5);
-                    pinkMaterial.emissiveColor = new BABYLON.Color3(0.5, 0.0, 0.2);
-                    
+                    blueMaterial.diffuseColor = new BABYLON.Color3(0.0, 0.7, 1.0); // Голубой цвет
+                    blueMaterial.specularColor = new BABYLON.Color3(0.2, 0.7, 1.0);
+                    blueMaterial.emissiveColor = new BABYLON.Color3(0.0, 0.3, 0.5);
+
+
                     // Функция для создания рельса
                     const createRail = function(posX, posY, posZ, width, height, length) {
                         const rail = BABYLON.MeshBuilder.CreateBox("rail", {
@@ -208,134 +236,134 @@
                             height: height,
                             depth: length
                         }, scene);
-                        
+
                         const railMaterial = new BABYLON.StandardMaterial("railMaterial", scene);
                         railMaterial.diffuseColor = new BABYLON.Color3(0.4, 0.4, 0.4);
                         rail.material = railMaterial;
-                        
+
                         rail.position = new BABYLON.Vector3(posX, posY, posZ);
-                        
+
                         // Добавляем физическое тело к рельсу (неподвижное)
                         rail.physicsImpostor = new BABYLON.PhysicsImpostor(
-                            rail, 
-                            BABYLON.PhysicsImpostor.BoxImpostor, 
-                            { mass: 0, restitution: 0.9 }, 
+                            rail,
+                            BABYLON.PhysicsImpostor.BoxImpostor,
+                            { mass: 0, restitution: 0.9 },
                             scene
                         );
-                        
+
                         rails.push({
                             mesh: rail,
                             position: new BABYLON.Vector3(posX, posY, posZ),
                             size: new BABYLON.Vector3(width, height, length)
                         });
-                        
+
                         return rail;
                     };
-                    
-                    // Функция для создания буквы
+
+                    // Функция для создания буквы (теперь значка $)
                     const createLetter = function(posX, posY, posZ) {
-                        // Случайно выбираем тип буквы (M или H)
-                        const isM = Math.random() > 0.5;
-                        const letterType = isM ? "M" : "H";
-                        const letterMaterial = isM ? blueMaterial : pinkMaterial;
-                        
+                        // Случайно выбираем тип значка ($ зеленого или голубого)
+                        const isGreenDollar = Math.random() > 0.25; // Зеленых в 3 раза больше, чем синих (75% шанс на зеленый)
+                        const letterType = "$";
+                        const letterMaterial = isGreenDollar ? greenMaterial : blueMaterial;
+
                         // Создаем текстовую плоскость
                         const letterPlane = BABYLON.MeshBuilder.CreatePlane("letter", {
                             width: 1,
                             height: 1,
                             sideOrientation: BABYLON.Mesh.DOUBLESIDE
                         }, scene);
-                        
+
                         // Создаем динамическую текстуру для отображения текста
                         const textureWidth = 256;
                         const textureHeight = 256;
                         const dynamicTexture = new BABYLON.DynamicTexture("letterTexture", {width: textureWidth, height: textureHeight}, scene);
-                        
+
                         // Настраиваем контекст для рисования
                         const textureContext = dynamicTexture.getContext();
                         textureContext.font = "bold 200px Arial";
                         textureContext.textAlign = "center";
                         textureContext.textBaseline = "middle";
-                        
+
                         // Очищаем текстуру
                         textureContext.clearRect(0, 0, textureWidth, textureHeight);
-                        
-                        // Рисуем букву
-                        if (isM) {
-                            textureContext.fillStyle = "#0066FF"; // Синий цвет
+
+                        // Рисуем значок доллара
+                        if (isGreenDollar) {
+                            textureContext.fillStyle = "#00FF00"; // Зеленый цвет
                         } else {
-                            textureContext.fillStyle = "#FF66AA"; // Розовый цвет
+                            textureContext.fillStyle = "#00BFFF"; // Голубой цвет
                         }
-                        
+
                         textureContext.fillText(letterType, textureWidth / 2, textureHeight / 2);
                         dynamicTexture.update();
-                        
+
                         // Создаем материал с текстурой
                         const letterTextMaterial = new BABYLON.StandardMaterial("letterMaterial", scene);
                         letterTextMaterial.diffuseTexture = dynamicTexture;
                         letterTextMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
-                        letterTextMaterial.emissiveColor = isM ? 
-                            new BABYLON.Color3(0.0, 0.1, 0.5) : 
-                            new BABYLON.Color3(0.5, 0.1, 0.3);
+                        letterTextMaterial.emissiveColor = isGreenDollar ?
+                            new BABYLON.Color3(0.0, 0.5, 0.0) :
+                            new BABYLON.Color3(0.0, 0.3, 0.5);
                         letterTextMaterial.backFaceCulling = false;
-                        
+
                         // Применяем материал к плоскости
                         letterPlane.material = letterTextMaterial;
-                        
+
                         // Позиционируем букву
                         letterPlane.position = new BABYLON.Vector3(posX, posY, posZ);
-                        
+
                         // Добавляем плоскость в массив букв
                         letters.push({
                             mesh: letterPlane,
                             type: letterType,
-                            isM: isM
+                            isGreenDollar: isGreenDollar
                         });
-                        
+
                         return letterPlane;
                     };
-                    
+
                     // Функция для создания новой случайной платформы
                     const createRandomPlatform = function() {
                         // Случайное смещение по X от -4 до 4
                         const offsetX = (Math.random() * 8) - 4;
-                        
+
                         // Случайное смещение по Y, не превышающее высоту платформы
                         const offsetY = ((Math.random() * 2) - 1) * (platformHeight * 0.7);
-                        
+
                         // Обновляем базовую высоту с плавным переходом
                         baseY = lastBaseY + offsetY;
                         lastBaseY = baseY;
-                        
+
                         // Ограничиваем максимальную и минимальную высоту
                         baseY = Math.max(-3, Math.min(3, baseY));
-                        
+
                         // Случайная длина платформы (от 8 до 15)
                         const length = 8 + Math.random() * 7;
-                        
+
                         // Случайная ширина платформы (от 3 до 5)
                         const width = 3 + Math.random() * 2;
-                        
+
                         // Создаем платформу
                         const newZ = lastPlatformZ - 5 - Math.random() * 5; // Промежуток от 5 до 10 единиц
                         const platform = createRail(offsetX, baseY, newZ, width, platformHeight, length);
-                        
+
                         // Обновляем позицию последней платформы
                         lastPlatformZ = newZ - length/2;
-                        
+
                         // Случайно добавляем буквы на платформу
-                        if (Math.random() > 0.3) { // 70% шанс для букв
-                            const letterCount = Math.floor(1 + Math.random() * 3); // 1-3 буквы
+                        if (Math.random() > 0.3) { // 70% шанс для значков
+                            const letterCount = Math.floor(1 + Math.random() * 3); // 1-3 значка
                             for (let i = 0; i < letterCount; i++) {
                                 const letterZ = newZ + (Math.random() * length) - length/2;
                                 const letterX = offsetX + (Math.random() * width/2) - width/4;
                                 createLetter(letterX, baseY + platformHeight/2 + 1.5, letterZ);
                             }
                         }
-                        
+
                         return platform;
                     };
-                    
+
                     // Функция проверки необходимости создания новых платформ
                     const checkAndCreatePlatforms = function() {
                         // Если игрок приближается к последней платформе, создаем новые
@@ -344,7 +372,7 @@
                                 createRandomPlatform();
                             }
                         }
-                        
+
                         // Удаляем далеко оставшиеся позади платформы
                         for (let i = rails.length - 1; i >= 0; i--) {
                             if (rails[i].position.z > ball.position.z + 50) {
@@ -352,7 +380,7 @@
                                 rails.splice(i, 1);
                             }
                         }
-                        
+
                         // Удаляем далеко оставшиеся позади буквы
                         for (let i = letters.length - 1; i >= 0; i--) {
                             if (letters[i].mesh.position.z > ball.position.z + 50) {
@@ -361,32 +389,33 @@
                             }
                         }
                     };
-                    
+
                     // Создаем начальную платформу
                     createRail(0, 0, 0, 5, platformHeight, 15);
                     lastPlatformZ = -15; // Конец начальной платформы
-                    
+
                     // Создаем несколько начальных платформ
                     for (let i = 0; i < 10; i++) {
                         createRandomPlatform();
                     }
-                    
+
                     // Переменные для управления
                     let forwardSpeed = -0.2;  // Скорость вперёд (отрицательная по Z)
                     let isJumping = false;
                     let horizontalMovement = 0;
-                    
+
                     // Обработка клавиш для ПК
                     const keyDown = (evt) => {
                         if (evt.keyCode === 32) { // Пробел
                             jump();
+                            if (!isMuted && jumpSound) jumpSound.play();
                         } else if (evt.keyCode === 37) { // Стрелка влево
                             horizontalMovement = -0.2; // Правильное направление влево
                         } else if (evt.keyCode === 39) { // Стрелка вправо
                             horizontalMovement = 0.2; // Правильное направление вправо
                         }
                     };
-                    
+
                     const keyUp = (evt) => {
                         if (evt.keyCode === 37 && horizontalMovement < 0) {
                             horizontalMovement = 0;
@@ -394,18 +423,18 @@
                             horizontalMovement = 0;
                         }
                     };
-                    
+
                     // Функция для нахождения ближайшей платформы впереди
                     const findNextPlatform = function() {
                         let closestDistance = Infinity;
                         let closestPlatform = null;
-                        
+
                         for (const rail of rails) {
                             // Проверяем только платформы впереди игрока
                             if (rail.position.z < ball.position.z) {
                                 // Вычисляем расстояние до платформы
                                 const dist = BABYLON.Vector3.Distance(ball.position, rail.position);
-                                
+
                                 // Если это ближайшая платформа спереди, запоминаем ее
                                 if (dist < closestDistance) {
                                     closestDistance = dist;
@@ -413,184 +442,208 @@
                                 }
                             }
                         }
-                        
+
                         return { platform: closestPlatform, distance: closestDistance };
                     };
-                    
+
                     // Функция прыжка с проверкой расстояния до следующей платформы
                     const jump = function() {
                         // Проверяем, что мяч на земле (не в прыжке)
                         const raycast = new BABYLON.Ray(ball.position, new BABYLON.Vector3(0, -1, 0), 1.5);
                         const hit = scene.pickWithRay(raycast);
-                        
+
                         if (hit.hit && !isJumping) {
                             isJumping = true;
-                            
+
                             // Находим следующую платформу и расстояние до нее
                             const nextPlatform = findNextPlatform();
-                            
+
                             // Базовая сила прыжка
                             let jumpForce = 9.0;
-                            
+
                             // Если есть платформа впереди, корректируем силу прыжка
                             if (nextPlatform.platform && nextPlatform.distance < 15) {
                                 // Увеличиваем силу прыжка в зависимости от расстояния
                                 jumpForce = Math.max(jumpForce, 9.0 + nextPlatform.distance * 0.2);
                                 console.log("Прыжок с силой: " + jumpForce + " на расстояние: " + nextPlatform.distance);
                             }
-                            
+
                             // Применяем импульс для прыжка
                             ball.physicsImpostor.applyImpulse(
-                                new BABYLON.Vector3(0, jumpForce, 0), 
+                                new BABYLON.Vector3(0, jumpForce, 0),
                                 ball.getAbsolutePosition()
                             );
-                            
+
                             setTimeout(() => { isJumping = false; }, 1000);
                         }
                     };
-                    
+
                     // Настройка обработчиков для ПК
                     window.addEventListener("keydown", keyDown);
                     window.addEventListener("keyup", keyUp);
-                    
+
                     // Настройка сенсорных элементов управления для мобильных устройств
                     if (isMobile) {
                         const leftBtn = document.getElementById('leftBtn');
                         const rightBtn = document.getElementById('rightBtn');
                         const jumpBtn = document.getElementById('jumpBtn');
-                        
+
                         // Функции для сенсорного управления
                         let isTouchingLeft = false;
                         let isTouchingRight = false;
-                        
+
                         // Обработка кнопки влево
                         leftBtn.addEventListener('touchstart', function(e) {
                             e.preventDefault();
                             isTouchingLeft = true;
-                            horizontalMovement = 0.2; // Правильное направление влево
+                            horizontalMovement = -0.2; // Правильное направление влево
                             leftBtn.classList.add('active');
                         }, {passive: false});
-                        
+
                         leftBtn.addEventListener('touchend', function(e) {
                             e.preventDefault();
                             isTouchingLeft = false;
                             if (!isTouchingRight) horizontalMovement = 0;
                             leftBtn.classList.remove('active');
                         }, {passive: false});
-                        
+
                         // Обработка кнопки вправо
                         rightBtn.addEventListener('touchstart', function(e) {
                             e.preventDefault();
                             isTouchingRight = true;
-                            horizontalMovement = -0.2; // Правильное направление вправо
+                            horizontalMovement = 0.2; // Правильное направление вправо
                             rightBtn.classList.add('active');
                         }, {passive: false});
-                        
+
                         rightBtn.addEventListener('touchend', function(e) {
                             e.preventDefault();
                             isTouchingRight = false;
                             if (!isTouchingLeft) horizontalMovement = 0;
                             rightBtn.classList.remove('active');
                         }, {passive: false});
-                        
+
                         // Обработка кнопки прыжка
                         jumpBtn.addEventListener('touchstart', function(e) {
                             e.preventDefault();
                             jump();
+                            if (!isMuted && jumpSound) jumpSound.play();
                             jumpBtn.classList.add('active');
                             setTimeout(() => jumpBtn.classList.remove('active'), 200);
                         }, {passive: false});
                     }
-                    
+
                     // Функция для проверки сбора букв
                     const checkLetterCollection = function() {
                         for (let i = letters.length - 1; i >= 0; i--) {
                             const letter = letters[i];
                             const distance = BABYLON.Vector3.Distance(ball.position, letter.mesh.position);
-                            
+
                             // Если мяч коснулся буквы
                             if (distance < 1.5) {
                                 // Увеличиваем счет в зависимости от типа буквы
-                                if (letter.isM) {
-                                    score += 10; // M - 10 очков
+                                if (letter.isGreenDollar) {
+                                    score += 25000; // Зеленый $ - 25000 очков
                                 } else {
-                                    score += 15; // H - 15 очков
+                                    score += 25600; // Голубой $ - 25600 очков
                                 }
                                 document.getElementById('scoreDisplay').textContent = "Счет: " + score;
-                                
+
+                                if (!isMuted && collectSound) collectSound.play();
+
                                 // Удаляем букву
                                 letter.mesh.dispose();
                                 letters.splice(i, 1);
                             }
                         }
                     };
-                    
+
+                    // Загрузка звуков
+                    BABYLON.SceneLoader.LoadSoundFromUrl("./", "jump.wav", scene, function(sound) {
+                        jumpSound = sound;
+                        jumpSound.setVolume(0.7); // Уровень громкости звука прыжка
+                    }, null, null, null, ".wav");
+
+                    BABYLON.SceneLoader.LoadSoundFromUrl("./", "collect.wav", scene, function(sound) {
+                        collectSound = sound;
+                        collectSound.setVolume(0.5); // Уровень громкости звука сбора
+                    }, null, null, null, ".wav");
+
+                    BABYLON.SceneLoader.LoadSoundFromUrl("./", "background_music.mp3", scene, function(sound) {
+                        backgroundMusic = sound;
+                        backgroundMusic.setVolume(0.5); // Уровень громкости фоновой музыки
+                        backgroundMusic.setLoop(true);
+                        if (!isMuted) {
+                            backgroundMusic.play();
+                        }
+                    }, null, null, null, ".mp3");
+
+
                     // Обновление игры на каждом кадре
                     scene.registerBeforeRender(function() {
                         // Проверка и создание новых платформ
                         checkAndCreatePlatforms();
-                        
+
                         // Движение мяча вперед автоматически и по горизонтали
                         const currentVelocity = ball.physicsImpostor.getLinearVelocity();
                         ball.physicsImpostor.setLinearVelocity(
                             new BABYLON.Vector3(
-                                horizontalMovement * 10, 
-                                currentVelocity.y, 
+                                horizontalMovement * 10,
+                                currentVelocity.y,
                                 forwardSpeed * 15
                             )
                         );
-                        
+
                         // Вращение мяча при движении
                         ball.rotate(BABYLON.Vector3.Right(), -forwardSpeed * 0.2);
-                        
+
                         // Обновление позиции камеры - следование за мячом
                         camera.position.x = ball.position.x;
                         camera.position.y = ball.position.y + 5;
                         camera.position.z = ball.position.z + 10;
-                        
+
                         // Камера смотрит на мяч
                         camera.setTarget(ball.position);
-                        
+
                         // Проверка сбора букв
                         checkLetterCollection();
-                        
+
                         // Анимация букв - вращение вокруг своей оси
                         for (const letter of letters) {
                             letter.mesh.rotation.y += 0.02;
                         }
-                        
+
                         // Проверка падения в пропасть
                         if (ball.position.y < -10) {
                             ball.position = new BABYLON.Vector3(0, 5, 0);
                             ball.physicsImpostor.setLinearVelocity(new BABYLON.Vector3(0, 0, 0));
-                            
+
                             // Сброс счета при падении
                             score = Math.max(0, score - 50);
                             document.getElementById('scoreDisplay').textContent = "Счет: " + score;
                         }
                     });
-                    
+
                     return scene;
                 };
-                
+
                 // Создаем сцену
                 const scene = createScene();
-                
+
                 // Скрываем экран загрузки когда сцена готова
                 scene.executeWhenReady(function() {
                     document.getElementById('loadingScreen').style.display = 'none';
                 });
-                
+
                 // Запускаем рендеринг
                 engine.runRenderLoop(function() {
                     scene.render();
                 });
-                
+
                 // Обработка изменения размера окна
                 window.addEventListener('resize', function() {
                     engine.resize();
                 });
-                
+
             } catch (error) {
                 showError("Ошибка: " + error.message);
                 console.error(error);
